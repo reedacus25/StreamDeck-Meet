@@ -680,7 +680,7 @@ class MeetWrapper { // eslint-disable-line
    * @return {?Element}
    */
   #getEnterMeetingButton() {
-    return document.querySelector('[jsname=Qx7uuf]');
+    return document.querySelector('[class=UywwFc-vQzf8d]');
   }
 
   /**
