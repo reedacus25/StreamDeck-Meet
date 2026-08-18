@@ -20,10 +20,10 @@
 
 /**
  *
- * @module StreamDeckV2
+ * @module StreamDeckMK2
  */
-class StreamDeckV2 { // eslint-disable-line
-  static PRODUCT_ID = 0x006d;
+class StreamDeckMK2 { // eslint-disable-line
+  static PRODUCT_ID = 0x0080;
 
   /*
     3 rows with 5 buttons

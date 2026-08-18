@@ -29,6 +29,17 @@ class MeetWrapper { // eslint-disable-line
     exitHall: 'exitHall',
   };
 
+// static getRoomState() {
+//     if (document.querySelector('[aria-label*="Leave call"]') || document.querySelector('[aria-label*="leave call"]')) {
+//       return 'meeting';
+//     } else if (document.querySelector('[aria-label*="Join now"]') || document.querySelector('[aria-label*="Ask to join"]')) {
+//       return 'greenRoom';
+//     } else if (document.querySelector('[aria-label*="Rejoin"]') || document.querySelector('[data-is-muted]') === null) {
+//       return 'exitHall';
+//     }
+//     return 'lobby';
+//   }
+
   #streamDeck;
 
   /**
@@ -72,6 +83,17 @@ class MeetWrapper { // eslint-disable-line
     });
     bodyObserver.observe(document.body, {attributes: true, childList: true});
   }
+
+static _findButtonByAriaPattern(regex) {
+    const elements = document.querySelectorAll('button[aria-label], div[role="button"][aria-label]');
+    for (let el of elements) {
+      if (regex.test(el.getAttribute('aria-label'))) {
+        return el;
+      }
+    }
+    return null;
+  }
+
 
 
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -240,6 +262,8 @@ class MeetWrapper { // eslint-disable-line
       } else if (buttonId === this.#streamDeck.buttonNameToId('hand')) {
         this.#tapHand();
       } else if (buttonId === this.#streamDeck.buttonNameToId('cc')) {
+        this.#tapCC();
+      } else if (buttonId === this.#streamDeck.buttonNameToId('adjust-view')) {
         this.#tapCC();
       } else if (buttonId === this.#streamDeck.buttonNameToId('end-call')) {
         this.#tapHangUp();
@@ -489,6 +513,34 @@ class MeetWrapper { // eslint-disable-line
     this.#updateGreenRoomCamButton();
   }
 
+  cycleLayout() {
+    // Attempt to open the More Options menu if Change Layout isn't directly visible
+    let moreOptionsBtn = MeetWrapper._findButtonByAriaPattern(/more options/i);
+    if (moreOptionsBtn && !document.querySelector('[aria-label*="Change layout"]')) {
+      moreOptionsBtn.click();
+      setTimeout(() => {
+        let layoutBtn = MeetWrapper._findButtonByAriaPattern(/change layout/i);
+        if (layoutBtn) layoutBtn.click();
+        // Wait for modal, then click a layout option (e.g., Tiled, Spotlight, Sidebar)
+        // Note: Layout names can be tricky, so clicking the next layout option based on a generic class/role or cycling could be complex. 
+        // A generic approach: find the active layout button and click the next sibling or a specific layout by aria-label.
+        setTimeout(()=>{
+          let tiledBtn = MeetWrapper._findButtonByAriaPattern(/tiled/i);
+          if(tiledBtn) tiledBtn.click();
+          
+          // Close layout window
+           let closeBtn = MeetWrapper._findButtonByAriaPattern(/close/i);
+           if(closeBtn) closeBtn.click();
+        }, 500);
+      }, 500);
+    } else {
+       let layoutBtn = MeetWrapper._findButtonByAriaPattern(/change layout/i);
+       if (layoutBtn) {
+         layoutBtn.click();
+         // Wait for modal to open, logic to select layout would go here
+       }
+    }
+  }
 
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    *
@@ -882,6 +934,10 @@ class MeetWrapper { // eslint-disable-line
   #getReturnToHomeButton() {
     const sel = '[jsname=WIVZEd] button';
     return document.querySelector(sel);
+  }
+
+getLayoutButton() {
+    return MeetWrapper._findButtonByAriaPattern(/change layout/i) || MeetWrapper._findButtonByAriaPattern(/more options/i);
   }
 
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *

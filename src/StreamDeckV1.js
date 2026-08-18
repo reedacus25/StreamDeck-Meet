@@ -58,6 +58,7 @@ class StreamDeckV1 { // eslint-disable-line
     'reaction-open': 2,
     'info': 1,
     'info-open': 1,
+    'adjust-view': 4,
     'users': 9,
     'users-open': 9,
     'chat': 8,
