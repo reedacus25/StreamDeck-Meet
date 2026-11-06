@@ -915,34 +915,279 @@ class MeetWrapper { // eslint-disable-line
   }
 
   /**
+   * Check if an element is disabled or unusable as an interactive target.
+   *
+   * @param {?Element} el
+   * @return {boolean}
+   */
+  #isElementDisabled(el) {
+    if (!el) {
+      return true;
+    }
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+        el.hasAttribute('disabled')) {
+      return true;
+    }
+    if (el.classList && el.classList.contains('is-disabled')) {
+      return true;
+    }
+    // Reject buttons inside the "Enter a code or nickname" input field container.
+    if (el.closest && el.closest(
+        '.UvuAre, [jsname="YPqjbf"], .qdOxv-fmcmS-wGMbrd-sM5MNb')) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Find the "Past" meetings section in the lobby.
+   *
+   * @return {?Element}
+   */
+  #getPastMeetingSection() {
+    const known = document.querySelector('section[jsname="IFO1Jf"]');
+    if (known) {
+      return known;
+    }
+    for (const section of document.querySelectorAll('section, [role="region"]')) {
+      const heading = section.querySelector(
+          '[role="heading"], h1, h2, h3, h4, h5, h6');
+      if (heading && /^\s*past\b/i.test(heading.textContent || '')) {
+        return section;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find the "Scheduled" / upcoming meetings section in the lobby.
+   *
+   * @return {?Element}
+   */
+  #getScheduledMeetingSection() {
+    // 1) Known jsname for the Scheduled section.
+    const known = document.querySelector('section[jsname="n39Uf"]');
+    if (known) {
+      return known;
+    }
+
+    // 2) Search by heading text across sections / regions.
+    const pastSection = this.#getPastMeetingSection();
+    for (const section of document.querySelectorAll('section, [role="region"]')) {
+      if (section === pastSection) {
+        continue;
+      }
+      const heading = section.querySelector(
+          '[role="heading"], h1, h2, h3, h4, h5, h6');
+      if (heading && /scheduled|upcoming|today/i.test(heading.textContent || '')) {
+        return section;
+      }
+    }
+
+    // 3) Fallback: any section containing meeting cards that isn't the past section.
+    for (const section of document.querySelectorAll('section, [role="region"]')) {
+      if (section === pastSection) {
+        continue;
+      }
+      if (section.querySelector(
+          '[data-unused-time], [data-unused-title], [data-focus-priority], [jscontroller="GxOwhc"]')) {
+        return section;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Extracts the actual clickable / interactive element from a meeting card.
+   * Works across Material 3 cards, native buttons, and custom wrappers.
+   *
+   * @param {!Element} card A meeting card container or element.
+   * @return {!Element} The clickable element (or the card itself).
+   */
+  #extractInteractiveCardElement(card) {
+    if (!card) {
+      return null;
+    }
+
+    // 1) If the card element itself is an interactive button or has focus priority:
+    if ((card.tagName === 'BUTTON' || card.getAttribute('role') === 'button' ||
+         card.hasAttribute('data-focus-priority')) &&
+        !this.#isElementDisabled(card)) {
+      return card;
+    }
+
+    // 2) Look for Google's a11y focus-priority element inside the card.
+    const priority = card.querySelector(
+        '[data-focus-priority="1"], [data-focus-priority], [data-default-focus="true"]');
+    if (priority && !this.#isElementDisabled(priority)) {
+      return priority;
+    }
+
+    // 3) Material or ARIA button inside the card.
+    const btn = card.querySelector(
+        'button:not([disabled]), [role="button"]:not([aria-disabled="true"]):not([disabled])');
+    if (btn && !this.#isElementDisabled(btn)) {
+      return btn;
+    }
+
+    // 4) Google WIZ jsaction parameter target (e.g. JIbuQc:oRCNsf(Dq2Egc) -> jsname="Dq2Egc").
+    const actionEl = card.hasAttribute('jsaction') ?
+        card : card.querySelector('[jsaction*="("]');
+    if (actionEl) {
+      const match = (actionEl.getAttribute('jsaction') || '').match(/\(([^)]+)\)/);
+      if (match) {
+        const target = card.querySelector(`[jsname="${match[1]}"]`);
+        if (target) {
+          const innerBtn = target.querySelector(
+              'button, [role="button"]') || target;
+          if (!this.#isElementDisabled(innerBtn)) {
+            return innerBtn;
+          }
+        }
+      }
+    }
+
+    // 5) data-unused-join label span target (historical).
+    const joinMarker = card.querySelector('[data-unused-join]');
+    if (joinMarker) {
+      const labelId = joinMarker.getAttribute('data-unused-join');
+      const labelEl = labelId ? document.getElementById(labelId) : null;
+      if (labelEl) {
+        const b = labelEl.closest(
+            'button, [role="button"], [class*="VfPpkd"]');
+        if (b && !this.#isElementDisabled(b)) {
+          return b;
+        }
+      }
+    }
+
+    // 6) Any focusable element or link.
+    const focusable = card.querySelector(
+        '[tabindex="0"]:not([disabled]), a[href]:not([disabled])');
+    if (focusable && !this.#isElementDisabled(focusable)) {
+      return focusable;
+    }
+
+    // 7) Only return card itself if it has an explicit click jsaction or button-like role.
+    const hasClickAction = /click:/i.test(card.getAttribute('jsaction') || '');
+    if ((hasClickAction || card.getAttribute('role') === 'button') &&
+        !this.#isElementDisabled(card)) {
+      return card;
+    }
+
+    return null;
+  }
+
+  /**
    * Get the Start Next Meeting button (lobby).
+   *
+   * Employs multiple resilient strategies so it will not break across
+   * Google Meet updates, re-minified class names, or DOM restructurings:
+   * 1. Direct a11y focus priority marker (data-focus-priority="1")
+   * 2. Scheduled section first card interactive element
+   * 3. Meeting card metadata markers (data-unused-time/title/join)
+   * 4. Meeting time-range heuristic
+   * 5. Visible, enabled Join button (excluding code-entry inputs)
    *
    * @return {?Element}
    */
   #getStartNextMeetingButton() {
-    // The new lobby (/home) marks every *joinable* meeting card with a
-    // hidden <span data-unused-join="ucc-N"> inside a
-    // jscontroller="GxOwhc" wrapper that also holds the real Join
-    // <button>. Past meetings lack the marker, so scanning for it
-    // reliably picks a joinable card even when past meetings appear
-    // earlier in the DOM.
-    for (const marker of document.querySelectorAll('[data-unused-join]')) {
-      const wrapper = marker.closest('[jscontroller="GxOwhc"]') ||
-          marker.parentElement;
-      const button = wrapper?.querySelector('button');
-      if (button) {
-        return button;
+    const pastSection = this.#getPastMeetingSection();
+    const isInPast = (el) => pastSection && (pastSection === el || pastSection.contains(el));
+
+    // Strategy 1: Google Meet's focus priority attribute.
+    // The lobby marks the next upcoming meeting with data-focus-priority="1"
+    // (legacy: data-default-focus="true").
+    const priorityCandidates = Array.from(
+        document.querySelectorAll(
+            '[data-focus-priority], [data-default-focus="true"]'))
+        .filter((el) => !isInPast(el) && !this.#isElementDisabled(el));
+    if (priorityCandidates.length) {
+      // Pick the lowest numeric priority (1 is highest priority).
+      priorityCandidates.sort((a, b) => {
+        const pa = parseInt(a.getAttribute('data-focus-priority') || '999', 10);
+        const pb = parseInt(b.getAttribute('data-focus-priority') || '999', 10);
+        return pa - pb;
+      });
+      const target = this.#extractInteractiveCardElement(priorityCandidates[0]);
+      if (target && !this.#isElementDisabled(target)) {
+        return target;
       }
     }
 
-    // Legacy lobby marked the first scheduled card directly.
-    const focused = document.querySelector('[data-default-focus="true"]');
-    if (focused) {
-      return focused.tagName === 'BUTTON' ? focused : focused.querySelector('button');
+    // Strategy 2: First card inside the "Scheduled" section.
+    const scheduledSection = this.#getScheduledMeetingSection();
+    if (scheduledSection) {
+      const card = scheduledSection.querySelector(
+          'ol > li, ul > li, [role="listitem"], [jscontroller="GxOwhc"], [jscontroller="fhtj7"]');
+      if (card) {
+        const target = this.#extractInteractiveCardElement(card);
+        if (target && !this.#isElementDisabled(target)) {
+          return target;
+        }
+      }
     }
 
-    // Last resort: first visible "Join" button.
-    return this.#findButtonByText(['Join']);
+    // Strategy 3: Meeting metadata markers (data-unused-time, data-unused-title, data-unused-join).
+    for (const marker of document.querySelectorAll(
+        '[data-unused-time], [data-unused-title], [data-unused-join]')) {
+      if (isInPast(marker)) {
+        continue;
+      }
+      const card = marker.closest(
+          'li, [role="listitem"], [jscontroller="GxOwhc"], [jscontroller="fhtj7"]') ||
+          marker.parentElement;
+      if (card) {
+        const target = this.#extractInteractiveCardElement(card);
+        if (target && !this.#isElementDisabled(target)) {
+          return target;
+        }
+      }
+    }
+
+    // Strategy 4: Meeting time range heuristic (e.g. "11:30 AM – 12:30 PM").
+    // Matches time ranges while ignoring the mini-calendar picker.
+    const timeRegex = /\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\s*[\u2013\u2014-]\s*\d{1,2}:\d{2}/;
+    for (const el of document.querySelectorAll('span, div, p')) {
+      if (isInPast(el) ||
+          (el.closest && el.closest(
+              '[role="grid"], .pYTkkf-Bz112c-LgbsSe, [jsname="cLCH8"]'))) {
+        continue;
+      }
+      if (el.children.length === 0 && timeRegex.test(el.textContent || '')) {
+        const card = el.closest(
+            'li, [role="listitem"], [jscontroller="GxOwhc"], [jscontroller="fhtj7"]') ||
+            el.parentElement;
+        if (card) {
+          const target = this.#extractInteractiveCardElement(card);
+          if (target && !this.#isElementDisabled(target)) {
+            return target;
+          }
+        }
+      }
+    }
+
+    // Strategy 5: Visible, enabled Join button (guarded against code-input Join buttons).
+    const joinCandidates = document.querySelectorAll('button, [role="button"]');
+    for (const btn of joinCandidates) {
+      if (this.#isElementDisabled(btn) || isInPast(btn)) {
+        continue;
+      }
+      const label = (btn.getAttribute('aria-label') || '').trim();
+      const text = (btn.textContent || '').trim();
+      const isJoinText = /^(join|join now|start)$/i.test(text) ||
+          /^(join|join now|start)\b/i.test(label);
+      if (isJoinText) {
+        const isVisible = btn.checkVisibility ?
+            btn.checkVisibility() : btn.offsetParent !== null;
+        if (isVisible) {
+          return btn;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -952,23 +1197,11 @@ class MeetWrapper { // eslint-disable-line
    * #getLobbyCardInteractiveElement, #setLobbyHighlightRing, #tapLobbyTab,
    * #tapLobbySelect) is kept for a future revisit.
    *
-   * Known unresolved issue (v1.3 logs): select resolved to the fhtj7 card
-   * wrapper (div.u88fae, visible=false) instead of the Join button — the
-   * [data-unused-join] lookup found no marker inside the live card, so
-   * native click / pointer sequence / jsaction / Enter all fired on the
-   * inert wrapper and nothing navigated. Manual Tab+Enter in the browser
-   * works fine. Next things to try: the live card may use different
-   * markers than the saved snapshots (data-unused-join may be added later
-   * by a controller — retry/observe), or drive focus() through the card's
-   * focusable descendant, or dispatch events with composed:true from
-   * document.activeElement.
-   *
    * Get all meeting cards in the lobby, in visual order: the upcoming /
-   * current cards first (they carry a data-unused-join marker), then the
-   * cards in the "Past" section. Used by the tab/select keys to move a
-   * highlight between meetings the same way Tab+Enter does by hand.
+   * current cards first, then the cards in the "Past" section. Used by the
+   * tab/select keys to move a highlight between meetings.
    *
-   * @return {!Element[]} fhtj7 card wrappers.
+   * @return {!Element[]} Card container elements.
    */
   #getLobbyMeetingCards() {
     const cards = [];
@@ -978,25 +1211,28 @@ class MeetWrapper { // eslint-disable-line
       }
     };
 
-    // Upcoming/current meetings: each card has a hidden data-unused-join
-    // marker; its fhtj7 wrapper carries the card's click handler.
-    for (const marker of document.querySelectorAll('[data-unused-join]')) {
-      push(marker.closest('[jscontroller="fhtj7"]'));
-    }
-
-    // Past meetings live in their own section (no data-unused-join).
-    let pastSection = document.querySelector('section[jsname="IFO1Jf"]');
-    if (!pastSection) {
-      for (const section of document.querySelectorAll('section')) {
-        const heading = section.querySelector('[role="heading"]');
-        if (heading && heading.textContent.trim() === 'Past') {
-          pastSection = section;
-          break;
-        }
+    // Upcoming/scheduled meetings first:
+    const scheduledSection = this.#getScheduledMeetingSection();
+    if (scheduledSection) {
+      for (const card of scheduledSection.querySelectorAll(
+          'ol > li, ul > li, [role="listitem"], [jscontroller="GxOwhc"], [jscontroller="fhtj7"]')) {
+        push(card);
       }
     }
+    const pastSection = this.#getPastMeetingSection();
+    for (const marker of document.querySelectorAll(
+        '[data-unused-time], [data-unused-title], [data-unused-join]')) {
+      if (pastSection && pastSection.contains(marker)) {
+        continue;
+      }
+      push(marker.closest(
+          'li, [role="listitem"], [jscontroller="GxOwhc"], [jscontroller="fhtj7"]'));
+    }
+
+    // Past meetings:
     if (pastSection) {
-      for (const card of pastSection.querySelectorAll('[jscontroller="fhtj7"]')) {
+      for (const card of pastSection.querySelectorAll(
+          'ol > li, ul > li, [role="listitem"], [jscontroller="fhtj7"], [jscontroller="GxOwhc"]')) {
         push(card);
       }
     }
@@ -1019,58 +1255,22 @@ class MeetWrapper { // eslint-disable-line
 
   /**
    * The card's actually-interactive element: for joinable meetings the
-   * inner Join button (clicking the fhtj7 wrapper alone does nothing —
-   * its jsaction is not triggered by our synthetic events), otherwise the
-   * wrapper itself (past meetings: opens the meeting details/recording).
+   * inner button / role=button, otherwise the card wrapper itself.
    *
-   * @param {!Element} card An fhtj7 card wrapper.
+   * @param {!Element} card A meeting card container.
    * @return {!Element}
    */
   #getLobbyCardInteractiveElement(card) {
-    const joinMarker = card.querySelector('[data-unused-join]');
-    if (joinMarker) {
-      const joinArea = joinMarker.closest('[jscontroller="GxOwhc"]') || card;
-
-      // 1) The marker's value is the id of a hidden "Join" label span that
-      //    lives INSIDE the Material button -> climb to the button.
-      const labelId = joinMarker.getAttribute('data-unused-join');
-      const labelEl = labelId ? document.getElementById(labelId) : null;
-      if (labelEl) {
-        const btn = labelEl.closest('button, [role="button"], [class*="VfPpkd"]');
-        if (btn && joinArea.contains(btn)) {
-          return btn;
-        }
-      }
-
-      // 2) The wrapper's jsaction names the button by jsname, e.g.
-      //    jsaction="JIbuQc:oRCNsf(Dq2Egc)" -> [jsname="Dq2Egc"].
-      const action = joinArea.getAttribute('jsaction') || '';
-      const param = action.match(/\(([^)]+)\)/);
-      if (param) {
-        const btn = joinArea.querySelector(`[jsname="${param[1]}"]`);
-        if (btn) {
-          return btn;
-        }
-      }
-
-      // 3) First Material button inside the join area.
-      const material = joinArea.querySelector('[class*="VfPpkd"]');
-      if (material) {
-        return material;
-      }
-      return joinArea;
-    }
-    return card;
+    return this.#extractInteractiveCardElement(card) || card;
   }
 
   /**
-   * Shows the visible highlight ring on the given card (the fhtj7 wrapper
-   * is a plain div, so browser focus gives no visible cue of its own).
+   * Shows the visible highlight ring on the given card.
    *
    * @param {?Element} card
    */
   #setLobbyHighlightRing(card) {
-    for (const el of document.querySelectorAll('[jscontroller="fhtj7"][data-sd-meet-highlight]')) {
+    for (const el of document.querySelectorAll('[data-sd-meet-highlight]')) {
       el.removeAttribute('data-sd-meet-highlight');
       el.style.boxShadow = '';
       el.style.outline = '';
@@ -1090,47 +1290,21 @@ class MeetWrapper { // eslint-disable-line
    *
    * Get the clickable element for the most recent *past* meeting (lobby).
    *
-   * In the /home lobby, past meetings are grouped in a "Past" section and,
-   * unlike joinable/scheduled cards, they carry no data-unused-join marker.
-   * The "previous" meeting is the last card in that section (closest to the
-   * present). Returns the card's inner button if it has one, otherwise the
-   * card wrapper itself, which is clickable to open/join the meeting.
-   *
    * @return {?Element}
    */
   #getJoinPreviousMeetingButton() {
-    // Find the "Past" section by its heading text (most durable across
-    // redesigns), falling back to the known jsname.
-    let pastSection = document.querySelector('section[jsname="IFO1Jf"]');
-    if (!pastSection) {
-      for (const section of document.querySelectorAll('section')) {
-        const heading = section.querySelector('[role="heading"]');
-        if (heading && heading.textContent.trim() === 'Past') {
-          pastSection = section;
-          break;
-        }
-      }
-    }
+    const pastSection = this.#getPastMeetingSection();
     if (!pastSection) {
       return null;
     }
 
-    // Each meeting card is wrapped in an fhtj7 controller that carries the
-    // card's click handler; take the last one (most recent past meeting).
-    // Fall back to the GxOwhc join-area wrapper if the layout changes.
-    let cards = pastSection.querySelectorAll('[jscontroller="fhtj7"]');
-    if (!cards.length) {
-      cards = pastSection.querySelectorAll('[jscontroller="GxOwhc"]');
-    }
+    let cards = pastSection.querySelectorAll(
+        'ol > li, ul > li, [role="listitem"], [jscontroller="fhtj7"], [jscontroller="GxOwhc"]');
     if (!cards.length) {
       return null;
     }
     const card = cards[cards.length - 1];
-
-    // Prefer an explicit button inside the card; otherwise the card wrapper
-    // itself is the clickable target (clicks bubble up, so we must click the
-    // card or below, never its ancestor <li>).
-    return card.querySelector('button') || card;
+    return this.#extractInteractiveCardElement(card) || card;
   }
 
   /**
@@ -1386,13 +1560,27 @@ class MeetWrapper { // eslint-disable-line
 
   /**
    * Wrapper for clicking on a button with logging if the button cannot be
-   * found.
+   * found. Dispatches pointer events for non-button interactive elements
+   * (e.g. Material 3 cards/div[role="button"]) before clicking.
    *
    * @param {Element} button Button to click
    * @param {?String} buttName Name of button (used for logging only)
    */
   #tapButtonWrapper(button, buttName) {
     if (button) {
+      try {
+        button.focus();
+      } catch (ex) {
+        // Not focusable.
+      }
+      if (button.tagName !== 'BUTTON') {
+        const opts = {bubbles: true, cancelable: true, view: window};
+        button.dispatchEvent(new PointerEvent('pointerover', opts));
+        button.dispatchEvent(new PointerEvent('pointerdown', opts));
+        button.dispatchEvent(new MouseEvent('mousedown', opts));
+        button.dispatchEvent(new PointerEvent('pointerup', opts));
+        button.dispatchEvent(new MouseEvent('mouseup', opts));
+      }
       button.click();
       return;
     }
