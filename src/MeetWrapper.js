@@ -184,27 +184,30 @@ class MeetWrapper { // eslint-disable-line
     this.#currentRoom = this.#ROOM_NAMES.lobby;
     console.log('*SD-Meet*', 'Room:', this.#currentRoom);
 
-    // TEMPORARILY DISABLED (see #tapLobbyTab): un-iconed tab/select keys.
-    // this.#lobbyHighlightIndex = 0;
-    // this.#lobbyHighlightTouched = false;
+    this.#lobbyHighlightIndex = 0;
+    this.#lobbyHighlightTouched = false;
     this.#resetButtons();
     this.#drawFullScreenButton();
     this.#drawButton(`start-next`);
     this.#drawButton(`start-instant`);
+    this.#drawButton(`previous`);
+    this.#drawButton(`next`);
 
-    // TEMPORARILY DISABLED: initial highlight-ring for the tab/select keys.
-    // for (let attempt = 0; attempt < 10; attempt++) {
-    //   setTimeout(() => {
-    //     if (this.#currentRoom === this.#ROOM_NAMES.lobby &&
-    //         !this.#lobbyHighlightTouched &&
-    //         this.#lobbyHighlightIndex === 0) {
-    //       const card = this.#getHighlightedLobbyCard();
-    //       if (card) {
-    //         this.#setLobbyHighlightRing(card);
-    //       }
-    //     }
-    //   }, 300 * (attempt + 1));
-    // }
+    for (let attempt = 0; attempt < 10; attempt++) {
+      setTimeout(() => {
+        if (this.#currentRoom === this.#ROOM_NAMES.lobby &&
+            !this.#lobbyHighlightTouched) {
+          const cards = this.#getLobbyMeetingCards();
+          if (cards.length > 0) {
+            this.#lobbyHighlightIndex = this.#getInitialLobbyHighlightIndex(cards);
+            const card = cards[this.#lobbyHighlightIndex];
+            if (card) {
+              this.#setLobbyHighlightRing(card);
+            }
+          }
+        }
+      }, 300 * (attempt + 1));
+    }
   }
 
   /**
@@ -314,14 +317,12 @@ class MeetWrapper { // eslint-disable-line
 
     // Available while in the lobby.
     if (this.#currentRoom === this.#ROOM_NAMES.lobby) {
-      // TEMPORARILY DISABLED (see #tapLobbyTab):
-      // if (buttonId === this.#streamDeck.buttonNameToId('select')) {
-      //   this.#tapLobbySelect();
-      // } else if (buttonId === this.#streamDeck.buttonNameToId('tab')) {
-      //   this.#tapLobbyTab();
-      // } else if (buttonId === this.#streamDeck.buttonNameToId('start-next')) {
       if (buttonId === this.#streamDeck.buttonNameToId('start-next')) {
         this.#tapStartNextMeeting();
+      } else if (buttonId === this.#streamDeck.buttonNameToId('previous')) {
+        this.#tapLobbyPrevious();
+      } else if (buttonId === this.#streamDeck.buttonNameToId('next')) {
+        this.#tapLobbyNext();
       } else if (buttonId === this.#streamDeck.buttonNameToId('start-instant')) { // eslint-disable-line
         this.#tapStartInstantMeeting();
       }
@@ -1191,27 +1192,36 @@ class MeetWrapper { // eslint-disable-line
   }
 
   /**
-   * TEMPORARILY DISABLED: lobby tab/select keys (see #enterLobby and
-   * #handleStreamDeckPress). The whole block of methods below
-   * (#getLobbyMeetingCards, #getHighlightedLobbyCard,
-   * #getLobbyCardInteractiveElement, #setLobbyHighlightRing, #tapLobbyTab,
-   * #tapLobbySelect) is kept for a future revisit.
-   *
-   * Get all meeting cards in the lobby, in visual order: the upcoming /
-   * current cards first, then the cards in the "Past" section. Used by the
-   * tab/select keys to move a highlight between meetings.
+   * Get all meeting cards in the lobby, in visual top-to-bottom order:
+   * past meetings first (up), then upcoming/scheduled meetings (down/future).
+   * Used by previous/next navigation to move a highlight between meetings.
    *
    * @return {!Element[]} Card container elements.
    */
   #getLobbyMeetingCards() {
     const cards = [];
     const push = (el) => {
-      if (el && !cards.includes(el)) {
-        cards.push(el);
+      if (!el) {
+        return;
+      }
+      const outer = el.closest('li, [role="listitem"]') || el;
+      if (!cards.some(
+          (existing) => existing === outer ||
+          existing.contains(outer) || outer.contains(existing))) {
+        cards.push(outer);
       }
     };
 
-    // Upcoming/scheduled meetings first:
+    // Past meetings first (top of screen / into the past):
+    const pastSection = this.#getPastMeetingSection();
+    if (pastSection) {
+      for (const card of pastSection.querySelectorAll(
+          'ol > li, ul > li, [role="listitem"], [jscontroller="fhtj7"], [jscontroller="GxOwhc"]')) {
+        push(card);
+      }
+    }
+
+    // Upcoming/scheduled meetings (below past / down into future):
     const scheduledSection = this.#getScheduledMeetingSection();
     if (scheduledSection) {
       for (const card of scheduledSection.querySelectorAll(
@@ -1219,7 +1229,6 @@ class MeetWrapper { // eslint-disable-line
         push(card);
       }
     }
-    const pastSection = this.#getPastMeetingSection();
     for (const marker of document.querySelectorAll(
         '[data-unused-time], [data-unused-title], [data-unused-join]')) {
       if (pastSection && pastSection.contains(marker)) {
@@ -1229,15 +1238,37 @@ class MeetWrapper { // eslint-disable-line
           'li, [role="listitem"], [jscontroller="GxOwhc"], [jscontroller="fhtj7"]'));
     }
 
-    // Past meetings:
-    if (pastSection) {
-      for (const card of pastSection.querySelectorAll(
-          'ol > li, ul > li, [role="listitem"], [jscontroller="fhtj7"], [jscontroller="GxOwhc"]')) {
-        push(card);
+    return cards;
+  }
+
+  /**
+   * Determine the default highlighted card index when entering the lobby.
+   * Prefers the next/current scheduled meeting card so 'start-next'
+   * targets it immediately unless the user navigates.
+   *
+   * @param {!Element[]} cards Array of lobby meeting cards.
+   * @return {number} Index in cards.
+   */
+  #getInitialLobbyHighlightIndex(cards) {
+    if (!cards || !cards.length) {
+      return 0;
+    }
+    const nextBtn = this.#getStartNextMeetingButton();
+    if (nextBtn) {
+      const idx = cards.findIndex(
+          (card) => card === nextBtn || card.contains(nextBtn));
+      if (idx !== -1) {
+        return idx;
       }
     }
-
-    return cards;
+    const scheduledSection = this.#getScheduledMeetingSection();
+    if (scheduledSection) {
+      const idx = cards.findIndex((card) => scheduledSection.contains(card));
+      if (idx !== -1) {
+        return idx;
+      }
+    }
+    return 0;
   }
 
   /**
@@ -1612,93 +1643,45 @@ class MeetWrapper { // eslint-disable-line
   }
 
   /**
-   * Starts the next meeting (lobby).
+   * Starts or joins the currently highlighted meeting (or the next upcoming
+   * meeting if no cards have been explicitly navigated).
    */
   #tapStartNextMeeting() {
-    const button = this.#getStartNextMeetingButton();
-    this.#tapButtonWrapper(button, 'startNext');
-  }
-
-  /**
-   * TEMPORARILY DISABLED: replaced by the tab/select lobby keys.
-   */
-  #tapJoinPreviousMeeting() {
-    const button = this.#getJoinPreviousMeetingButton();
-    this.#tapButtonWrapper(button, 'joinPrevious');
-  }
-
-  /**
-   * Moves the lobby highlight to the next meeting card (wraps around),
-   * like pressing Tab on the home page. A blue ring marks the highlighted
-   * card, and the card's interactive element is focused.
-   */
-  #tapLobbyTab() {
+    let target = null;
     const cards = this.#getLobbyMeetingCards();
-    if (!cards.length) {
-      console.warn('*SD-Meet*', 'No meeting cards found in lobby');
+    if (cards.length > 0) {
+      if (!this.#lobbyHighlightTouched) {
+        this.#lobbyHighlightIndex = this.#getInitialLobbyHighlightIndex(cards);
+      }
+      const card = cards[this.#lobbyHighlightIndex % cards.length];
+      if (card) {
+        target = this.#getLobbyCardInteractiveElement(card);
+      }
+    }
+    if (!target) {
+      target = this.#getStartNextMeetingButton();
+    }
+    if (!target) {
+      console.warn('*SD-Meet*', 'Unable to find startNext button or highlighted card');
       return;
     }
-    this.#lobbyHighlightIndex = (this.#lobbyHighlightIndex + 1) % cards.length;
-    this.#lobbyHighlightTouched = true;
-    const card = cards[this.#lobbyHighlightIndex];
-    const label = (card.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    console.log('*SD-Meet*', `Lobby tab ${this.#lobbyHighlightIndex + 1}/${cards.length}: "${label}"`);
-    this.#setLobbyHighlightRing(card);
-    try {
-      this.#getLobbyCardInteractiveElement(card).focus();
-    } catch (ex) {
-      // Not focusable; the ring still marks the highlight.
-    }
-  }
 
-  /**
-   * Activates the currently highlighted lobby meeting card, like pressing
-   * Enter on the home page. Joins a joinable meeting (clicks its Join
-   * button), or opens the details/recording of a past one. If the click
-   * doesn't navigate, an Enter keydown is sent as a fallback.
-   */
-  #tapLobbySelect() {
-    const cards = this.#getLobbyMeetingCards();
-    if (!cards.length) {
-      console.warn('*SD-Meet*', 'No meeting cards found in lobby');
-      return;
-    }
-    const card = cards[this.#lobbyHighlightIndex % cards.length];
-    const label = (card.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    const target = this.#getLobbyCardInteractiveElement(card);
-    const targetDesc = `${target.tagName.toLowerCase()}[class="${
-        (target.getAttribute('class') || '').split(' ').slice(0, 2).join(' ')}"]` +
-        (target.getAttribute('jsname') ? ` jsname=${target.getAttribute('jsname')}` : '') +
-        ` "${(target.textContent || '').trim().slice(0, 30)}"`;
-    const visibility = target.checkVisibility ?
-        target.checkVisibility() : target.offsetParent !== null;
-    console.log('*SD-Meet*', `Lobby select: "${label}" -> ${targetDesc}` +
-        ` visible=${!!visibility} disabled=${target.disabled}`);
-
-    // Try several activation paths in order; stop as soon as we leave the
-    // lobby. 1) native click, 2) full pointer sequence, 3) Google's
-    // internal jsaction dispatcher (data-jsh), 4) Enter keydown.
     const stillInLobby = () =>
         this.#currentRoom === this.#ROOM_NAMES.lobby && target.isConnected;
 
-    try {
-      target.focus();
-    } catch (ex) {
-      // Not focusable.
-    }
-    target.click();
+    this.#tapButtonWrapper(target, 'startNext');
+
     setTimeout(() => {
       if (!stillInLobby()) {
         return;
       }
-      console.log('*SD-Meet*', 'Lobby select: .click() did not navigate, trying pointer sequence');
       this.#robustClick(target);
     }, 500);
+
     setTimeout(() => {
       if (!stillInLobby()) {
         return;
       }
-      console.log('*SD-Meet*', 'Lobby select: pointer sequence did not navigate, trying jsaction');
       const jsh = target.getAttribute('data-jsh') || '';
       const action = target.getAttribute('jsaction') || '';
       const jshMap = {};
@@ -1708,7 +1691,6 @@ class MeetWrapper { // eslint-disable-line
           jshMap[key] = val;
         }
       }
-      // jsaction is "event:actionName;..."; we only want the click one.
       for (const pair of action.split(';')) {
         const [event, name] = pair.split(':');
         if (event === 'click' && name) {
@@ -1719,18 +1701,15 @@ class MeetWrapper { // eslint-disable-line
             } catch (ex) {
               console.warn('*SD-Meet*', `jsaction ${internal} threw:`, ex);
             }
-          } else {
-            console.warn('*SD-Meet*',
-                `jsaction click "${name}" -> "${internal}" not callable`);
           }
         }
       }
     }, 1200);
+
     setTimeout(() => {
       if (!stillInLobby()) {
         return;
       }
-      console.log('*SD-Meet*', 'Lobby select: jsaction did not navigate, trying Enter');
       target.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
         bubbles: true, cancelable: true,
@@ -1740,6 +1719,59 @@ class MeetWrapper { // eslint-disable-line
         bubbles: true, cancelable: true,
       }));
     }, 1900);
+  }
+
+  /**
+   * Moves the lobby highlight up or into the past (wraps around).
+   * Highlights the card with a blue ring and focuses its interactive element.
+   */
+  #tapLobbyPrevious() {
+    const cards = this.#getLobbyMeetingCards();
+    if (!cards.length) {
+      console.warn('*SD-Meet*', 'No meeting cards found in lobby');
+      return;
+    }
+    if (!this.#lobbyHighlightTouched) {
+      this.#lobbyHighlightIndex = this.#getInitialLobbyHighlightIndex(cards);
+    }
+    this.#lobbyHighlightIndex =
+        (this.#lobbyHighlightIndex - 1 + cards.length) % cards.length;
+    this.#lobbyHighlightTouched = true;
+    const card = cards[this.#lobbyHighlightIndex];
+    const label = (card.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    console.log('*SD-Meet*', `Lobby previous ${this.#lobbyHighlightIndex + 1}/${cards.length}: "${label}"`);
+    this.#setLobbyHighlightRing(card);
+    try {
+      this.#getLobbyCardInteractiveElement(card).focus();
+    } catch (ex) {
+      // Not focusable; the ring still marks the highlight.
+    }
+  }
+
+  /**
+   * Moves the lobby highlight down or into the future (wraps around).
+   * Highlights the card with a blue ring and focuses its interactive element.
+   */
+  #tapLobbyNext() {
+    const cards = this.#getLobbyMeetingCards();
+    if (!cards.length) {
+      console.warn('*SD-Meet*', 'No meeting cards found in lobby');
+      return;
+    }
+    if (!this.#lobbyHighlightTouched) {
+      this.#lobbyHighlightIndex = this.#getInitialLobbyHighlightIndex(cards);
+    }
+    this.#lobbyHighlightIndex = (this.#lobbyHighlightIndex + 1) % cards.length;
+    this.#lobbyHighlightTouched = true;
+    const card = cards[this.#lobbyHighlightIndex];
+    const label = (card.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    console.log('*SD-Meet*', `Lobby next ${this.#lobbyHighlightIndex + 1}/${cards.length}: "${label}"`);
+    this.#setLobbyHighlightRing(card);
+    try {
+      this.#getLobbyCardInteractiveElement(card).focus();
+    } catch (ex) {
+      // Not focusable; the ring still marks the highlight.
+    }
   }
 
   /**

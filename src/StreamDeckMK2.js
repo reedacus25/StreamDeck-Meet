@@ -38,6 +38,8 @@ class StreamDeckMK2 { // eslint-disable-line
     'fullscreen-disabled': 2,
 
     // Lobby
+    'previous': 4,
+    'next': 9,
     'start-next': 5,
     'start-instant': 6,
 

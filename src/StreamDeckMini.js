@@ -33,10 +33,8 @@ class StreamDeckMini { // eslint-disable-line
 
   buttonNameToIdMap = {
     // Lobby
-    // Temporarily disabled (see MeetWrapper.js #tapLobbyTab):
-    // 'select': -1, // no slot on the Mini
-    // 'tab': -1,    // no slot on the Mini
-    // 'join-previous': -1, // replaced by select/tab
+    'previous': -1,
+    'next': -1,
     'start-instant': 6,
     'start-next': 5,
 

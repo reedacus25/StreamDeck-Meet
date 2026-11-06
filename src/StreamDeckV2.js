@@ -38,10 +38,8 @@ class StreamDeckV2 { // eslint-disable-line
     'fullscreen-disabled': 2,
 
     // Lobby
-    // Temporarily disabled (see MeetWrapper.js #tapLobbyTab):
-    // 'select': 0, // un-iconed: activate highlighted meeting card
-    // 'tab': 1,    // un-iconed: cycle highlighted meeting card
-    // 'join-previous': 0, // replaced by select/tab
+    'previous': 4,
+    'next': 9,
     'start-next': 5,
     'start-instant': 6,
 
